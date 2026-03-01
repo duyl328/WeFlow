@@ -84,6 +84,11 @@ export interface ElectronAPI {
       }
       error?: string
     }>
+    getSessionMessageCounts: (sessionIds: string[]) => Promise<{
+      success: boolean
+      counts?: Record<string, number>
+      error?: string
+    }>
     enrichSessionsContactInfo: (usernames: string[]) => Promise<{
       success: boolean
       contacts?: Record<string, { displayName?: string; avatarUrl?: string }>

@@ -131,6 +131,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     connect: () => ipcRenderer.invoke('chat:connect'),
     getSessions: () => ipcRenderer.invoke('chat:getSessions'),
     getExportTabCounts: () => ipcRenderer.invoke('chat:getExportTabCounts'),
+    getSessionMessageCounts: (sessionIds: string[]) => ipcRenderer.invoke('chat:getSessionMessageCounts', sessionIds),
     enrichSessionsContactInfo: (usernames: string[]) =>
       ipcRenderer.invoke('chat:enrichSessionsContactInfo', usernames),
     getMessages: (sessionId: string, offset?: number, limit?: number, startTime?: number, endTime?: number, ascending?: boolean) =>

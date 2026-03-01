@@ -771,6 +771,48 @@ class ChatService {
   }
 
   /**
+   * 批量获取会话消息总数（轻量接口，用于列表优先排序）
+   */
+  async getSessionMessageCounts(sessionIds: string[]): Promise<{
+    success: boolean
+    counts?: Record<string, number>
+    error?: string
+  }> {
+    try {
+      const connectResult = await this.ensureConnected()
+      if (!connectResult.success) {
+        return { success: false, error: connectResult.error || '数据库未连接' }
+      }
+
+      const normalizedSessionIds = Array.from(
+        new Set(
+          (sessionIds || [])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+        )
+      )
+      if (normalizedSessionIds.length === 0) {
+        return { success: true, counts: {} }
+      }
+
+      const counts: Record<string, number> = {}
+      await this.forEachWithConcurrency(normalizedSessionIds, 8, async (sessionId) => {
+        try {
+          const result = await wcdbService.getMessageCount(sessionId)
+          counts[sessionId] = result.success && typeof result.count === 'number' ? result.count : 0
+        } catch {
+          counts[sessionId] = 0
+        }
+      })
+
+      return { success: true, counts }
+    } catch (e) {
+      console.error('ChatService: 批量获取会话消息总数失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 获取通讯录列表
    */
   async getContacts(): Promise<{ success: boolean; contacts?: ContactInfo[]; error?: string }> {

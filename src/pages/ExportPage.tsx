@@ -237,9 +237,29 @@ const timestampOrDash = (timestamp?: number): string => {
 }
 
 const createTaskId = (): string => `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-const METRICS_VIEWPORT_PREFETCH = 140
-const METRICS_BACKGROUND_BATCH = 60
-const METRICS_BACKGROUND_INTERVAL_MS = 180
+const MESSAGE_COUNT_VIEWPORT_PREFETCH = 220
+const MESSAGE_COUNT_BACKGROUND_BATCH = 180
+const MESSAGE_COUNT_BACKGROUND_INTERVAL_MS = 100
+const METRICS_VIEWPORT_PREFETCH = 90
+const METRICS_BACKGROUND_BATCH = 40
+const METRICS_BACKGROUND_INTERVAL_MS = 220
+const CONTACT_ENRICH_TIMEOUT_MS = 7000
+
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
 
 const WriteLayoutSelector = memo(function WriteLayoutSelector({
   writeLayout,
@@ -306,6 +326,7 @@ function ExportPage() {
   const [isTaskCenterExpanded, setIsTaskCenterExpanded] = useState(false)
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [prefetchedTabCounts, setPrefetchedTabCounts] = useState<Record<ConversationTab, number> | null>(null)
+  const [sessionMessageCounts, setSessionMessageCounts] = useState<Record<string, number>>({})
   const [sessionMetrics, setSessionMetrics] = useState<Record<string, SessionMetrics>>({})
   const [searchKeyword, setSearchKeyword] = useState('')
   const [activeTab, setActiveTab] = useState<ConversationTab>('private')
@@ -355,8 +376,10 @@ function ExportPage() {
   const progressUnsubscribeRef = useRef<(() => void) | null>(null)
   const runningTaskIdRef = useRef<string | null>(null)
   const tasksRef = useRef<ExportTask[]>([])
+  const sessionMessageCountsRef = useRef<Record<string, number>>({})
   const sessionMetricsRef = useRef<Record<string, SessionMetrics>>({})
   const sessionLoadTokenRef = useRef(0)
+  const loadingMessageCountsRef = useRef<Set<string>>(new Set())
   const loadingMetricsRef = useRef<Set<string>>(new Set())
   const preselectAppliedRef = useRef(false)
   const visibleSessionsRef = useRef<SessionRow[]>([])
@@ -364,6 +387,10 @@ function ExportPage() {
   useEffect(() => {
     tasksRef.current = tasks
   }, [tasks])
+
+  useEffect(() => {
+    sessionMessageCountsRef.current = sessionMessageCounts
+  }, [sessionMessageCounts])
 
   useEffect(() => {
     sessionMetricsRef.current = sessionMetrics
@@ -468,6 +495,12 @@ function ExportPage() {
     sessionLoadTokenRef.current = loadToken
     setIsLoading(true)
     setIsSessionEnriching(false)
+    loadingMessageCountsRef.current.clear()
+    loadingMetricsRef.current.clear()
+    sessionMessageCountsRef.current = {}
+    sessionMetricsRef.current = {}
+    setSessionMessageCounts({})
+    setSessionMetrics({})
 
     const isStale = () => sessionLoadTokenRef.current !== loadToken
 
@@ -503,10 +536,10 @@ function ExportPage() {
         setIsSessionEnriching(true)
         void (async () => {
           try {
-            const contactsResult = await window.electronAPI.chat.getContacts()
+            const contactsResult = await withTimeout(window.electronAPI.chat.getContacts(), CONTACT_ENRICH_TIMEOUT_MS)
             if (isStale()) return
 
-            const contacts: ContactInfo[] = contactsResult.success && contactsResult.contacts ? contactsResult.contacts : []
+            const contacts: ContactInfo[] = contactsResult?.success && contactsResult.contacts ? contactsResult.contacts : []
             const nextContactMap = contacts.reduce<Record<string, ContactInfo>>((map, contact) => {
               map[contact.username] = contact
               return map
@@ -518,8 +551,11 @@ function ExportPage() {
 
             let extraContactMap: Record<string, { displayName?: string; avatarUrl?: string }> = {}
             if (needsEnrichment.length > 0) {
-              const enrichResult = await window.electronAPI.chat.enrichSessionsContactInfo(needsEnrichment)
-              if (enrichResult.success && enrichResult.contacts) {
+              const enrichResult = await withTimeout(
+                window.electronAPI.chat.enrichSessionsContactInfo(needsEnrichment),
+                CONTACT_ENRICH_TIMEOUT_MS
+              )
+              if (enrichResult?.success && enrichResult.contacts) {
                 extraContactMap = enrichResult.contacts
               }
             }
@@ -539,12 +575,7 @@ function ExportPage() {
                   avatarUrl
                 }
               })
-              .sort((a, b) => {
-                const aMetric = sessionMetricsRef.current[a.username]?.totalMessages ?? 0
-                const bMetric = sessionMetricsRef.current[b.username]?.totalMessages ?? 0
-                if (bMetric !== aMetric) return bMetric - aMetric
-                return (b.sortTimestamp || b.lastTimestamp || 0) - (a.sortTimestamp || a.lastTimestamp || 0)
-              })
+              .sort((a, b) => (b.sortTimestamp || b.lastTimestamp || 0) - (a.sortTimestamp || a.lastTimestamp || 0))
 
             setSessions(nextSessions)
           } catch (enrichError) {
@@ -566,10 +597,8 @@ function ExportPage() {
 
   useEffect(() => {
     void loadBaseConfig()
-    void (async () => {
-      await loadTabCounts()
-      await loadSessions()
-    })()
+    void loadTabCounts()
+    void loadSessions()
 
     // 朋友圈统计延后一点加载，避免与首屏会话初始化抢占。
     const timer = window.setTimeout(() => {
@@ -608,23 +637,74 @@ function ExportPage() {
         )
       })
       .sort((a, b) => {
-        const totalA = sessionMetrics[a.username]?.totalMessages ?? 0
-        const totalB = sessionMetrics[b.username]?.totalMessages ?? 0
-        if (totalB !== totalA) {
+        const totalA = sessionMessageCounts[a.username]
+        const totalB = sessionMessageCounts[b.username]
+        const hasTotalA = typeof totalA === 'number'
+        const hasTotalB = typeof totalB === 'number'
+
+        if (hasTotalA && hasTotalB && totalB !== totalA) {
           return totalB - totalA
+        }
+        if (hasTotalA !== hasTotalB) {
+          return hasTotalA ? -1 : 1
         }
 
         const latestA = sessionMetrics[a.username]?.lastTimestamp ?? a.lastTimestamp ?? 0
         const latestB = sessionMetrics[b.username]?.lastTimestamp ?? b.lastTimestamp ?? 0
         return latestB - latestA
       })
-  }, [sessions, activeTab, searchKeyword, sessionMetrics])
+  }, [sessions, activeTab, searchKeyword, sessionMessageCounts, sessionMetrics])
 
   useEffect(() => {
     visibleSessionsRef.current = visibleSessions
   }, [visibleSessions])
 
+  const ensureSessionMessageCounts = useCallback(async (targetSessions: SessionRow[]) => {
+    const loadTokenAtStart = sessionLoadTokenRef.current
+    const currentCounts = sessionMessageCountsRef.current
+    const pending = targetSessions.filter(
+      session => currentCounts[session.username] === undefined && !loadingMessageCountsRef.current.has(session.username)
+    )
+    if (pending.length === 0) return
+
+    const updates: Record<string, number> = {}
+    for (const session of pending) {
+      loadingMessageCountsRef.current.add(session.username)
+    }
+
+    try {
+      const batchSize = 220
+      for (let i = 0; i < pending.length; i += batchSize) {
+        if (loadTokenAtStart !== sessionLoadTokenRef.current) return
+        const chunk = pending.slice(i, i + batchSize)
+        const ids = chunk.map(session => session.username)
+
+        try {
+          const result = await window.electronAPI.chat.getSessionMessageCounts(ids)
+          for (const session of chunk) {
+            const value = result.success && result.counts ? result.counts[session.username] : undefined
+            updates[session.username] = typeof value === 'number' ? value : 0
+          }
+        } catch (error) {
+          console.error('加载会话总消息数失败:', error)
+          for (const session of chunk) {
+            updates[session.username] = 0
+          }
+        }
+      }
+    } finally {
+      for (const session of pending) {
+        loadingMessageCountsRef.current.delete(session.username)
+      }
+    }
+
+    if (loadTokenAtStart === sessionLoadTokenRef.current && Object.keys(updates).length > 0) {
+      setSessionMessageCounts(prev => ({ ...prev, ...updates }))
+    }
+  }, [])
+
   const ensureSessionMetrics = useCallback(async (targetSessions: SessionRow[]) => {
+    const loadTokenAtStart = sessionLoadTokenRef.current
     const currentMetrics = sessionMetricsRef.current
     const pending = targetSessions.filter(session => !currentMetrics[session.username] && !loadingMetricsRef.current.has(session.username))
     if (pending.length === 0) return
@@ -637,6 +717,7 @@ function ExportPage() {
     try {
       const batchSize = 80
       for (let i = 0; i < pending.length; i += batchSize) {
+        if (loadTokenAtStart !== sessionLoadTokenRef.current) return
         const chunk = pending.slice(i, i + batchSize)
         const ids = chunk.map(session => session.username)
 
@@ -677,35 +758,48 @@ function ExportPage() {
       }
     }
 
-    if (Object.keys(updates).length > 0) {
+    if (loadTokenAtStart === sessionLoadTokenRef.current && Object.keys(updates).length > 0) {
       setSessionMetrics(prev => ({ ...prev, ...updates }))
     }
   }, [])
 
   useEffect(() => {
-    const keyword = searchKeyword.trim().toLowerCase()
-    const targets = sessions
-      .filter((session) => {
-        if (session.kind !== activeTab) return false
-        if (!keyword) return true
-        return (
-          (session.displayName || '').toLowerCase().includes(keyword) ||
-          session.username.toLowerCase().includes(keyword)
-        )
-      })
-      .sort((a, b) => (b.sortTimestamp || b.lastTimestamp || 0) - (a.sortTimestamp || a.lastTimestamp || 0))
-      .slice(0, METRICS_VIEWPORT_PREFETCH)
+    const targets = visibleSessions.slice(0, MESSAGE_COUNT_VIEWPORT_PREFETCH)
+    void ensureSessionMessageCounts(targets)
+  }, [visibleSessions, ensureSessionMessageCounts])
+
+  useEffect(() => {
+    const targets = visibleSessions.slice(0, METRICS_VIEWPORT_PREFETCH)
     void ensureSessionMetrics(targets)
-  }, [sessions, activeTab, searchKeyword, ensureSessionMetrics])
+  }, [visibleSessions, ensureSessionMetrics])
 
   const handleTableRangeChanged = useCallback((range: { startIndex: number; endIndex: number }) => {
     const current = visibleSessionsRef.current
     if (current.length === 0) return
-    const start = Math.max(0, range.startIndex - METRICS_VIEWPORT_PREFETCH)
-    const end = Math.min(current.length - 1, range.endIndex + METRICS_VIEWPORT_PREFETCH)
+    const prefetch = Math.max(MESSAGE_COUNT_VIEWPORT_PREFETCH, METRICS_VIEWPORT_PREFETCH)
+    const start = Math.max(0, range.startIndex - prefetch)
+    const end = Math.min(current.length - 1, range.endIndex + prefetch)
     if (end < start) return
-    void ensureSessionMetrics(current.slice(start, end + 1))
-  }, [ensureSessionMetrics])
+    const rangeSessions = current.slice(start, end + 1)
+    void ensureSessionMessageCounts(rangeSessions)
+    void ensureSessionMetrics(rangeSessions)
+  }, [ensureSessionMessageCounts, ensureSessionMetrics])
+
+  useEffect(() => {
+    if (sessions.length === 0) return
+    let cursor = 0
+    const timer = window.setInterval(() => {
+      if (cursor >= sessions.length) {
+        window.clearInterval(timer)
+        return
+      }
+      const chunk = sessions.slice(cursor, cursor + MESSAGE_COUNT_BACKGROUND_BATCH)
+      cursor += MESSAGE_COUNT_BACKGROUND_BATCH
+      void ensureSessionMessageCounts(chunk)
+    }, MESSAGE_COUNT_BACKGROUND_INTERVAL_MS)
+
+    return () => window.clearInterval(timer)
+  }, [sessions, ensureSessionMessageCounts])
 
   useEffect(() => {
     if (sessions.length === 0) return
@@ -1335,7 +1429,8 @@ function ExportPage() {
   }
 
   const renderRowCells = (session: SessionRow) => {
-    const metrics = sessionMetrics[session.username] || {}
+    const metrics = sessionMetrics[session.username]
+    const totalMessages = sessionMessageCounts[session.username]
     const checked = selectedSessions.has(session.username)
 
     return (
@@ -1351,35 +1446,43 @@ function ExportPage() {
         </td>
 
         <td>{renderSessionName(session)}</td>
-        <td>{valueOrDash(metrics.totalMessages)}</td>
-        <td>{valueOrDash(metrics.voiceMessages)}</td>
-        <td>{valueOrDash(metrics.imageMessages)}</td>
-        <td>{valueOrDash(metrics.videoMessages)}</td>
-        <td>{valueOrDash(metrics.emojiMessages)}</td>
+        <td>
+          {typeof totalMessages === 'number'
+            ? totalMessages.toLocaleString()
+            : (
+              <span className="count-loading">
+                统计中<span className="animated-ellipsis" aria-hidden="true">...</span>
+              </span>
+            )}
+        </td>
+        <td>{valueOrDash(metrics?.voiceMessages)}</td>
+        <td>{valueOrDash(metrics?.imageMessages)}</td>
+        <td>{valueOrDash(metrics?.videoMessages)}</td>
+        <td>{valueOrDash(metrics?.emojiMessages)}</td>
 
         {(activeTab === 'private' || activeTab === 'former_friend') && (
           <>
-            <td>{valueOrDash(metrics.privateMutualGroups)}</td>
-            <td>{timestampOrDash(metrics.firstTimestamp)}</td>
-            <td>{timestampOrDash(metrics.lastTimestamp)}</td>
+            <td>{valueOrDash(metrics?.privateMutualGroups)}</td>
+            <td>{timestampOrDash(metrics?.firstTimestamp)}</td>
+            <td>{timestampOrDash(metrics?.lastTimestamp)}</td>
           </>
         )}
 
         {activeTab === 'group' && (
           <>
-            <td>{valueOrDash(metrics.groupMyMessages)}</td>
-            <td>{valueOrDash(metrics.groupMemberCount)}</td>
-            <td>{valueOrDash(metrics.groupActiveSpeakers)}</td>
-            <td>{valueOrDash(metrics.groupMutualFriends)}</td>
-            <td>{timestampOrDash(metrics.firstTimestamp)}</td>
-            <td>{timestampOrDash(metrics.lastTimestamp)}</td>
+            <td>{valueOrDash(metrics?.groupMyMessages)}</td>
+            <td>{valueOrDash(metrics?.groupMemberCount)}</td>
+            <td>{valueOrDash(metrics?.groupActiveSpeakers)}</td>
+            <td>{valueOrDash(metrics?.groupMutualFriends)}</td>
+            <td>{timestampOrDash(metrics?.firstTimestamp)}</td>
+            <td>{timestampOrDash(metrics?.lastTimestamp)}</td>
           </>
         )}
 
         {activeTab === 'official' && (
           <>
-            <td>{timestampOrDash(metrics.firstTimestamp)}</td>
-            <td>{timestampOrDash(metrics.lastTimestamp)}</td>
+            <td>{timestampOrDash(metrics?.firstTimestamp)}</td>
+            <td>{timestampOrDash(metrics?.lastTimestamp)}</td>
           </>
         )}
 
@@ -1616,10 +1719,10 @@ function ExportPage() {
           </div>
         </div>
 
-        {(isLoading || isSessionEnriching) && (
+        {!showInitialSkeleton && (isLoading || isSessionEnriching) && (
           <div className="table-stage-hint">
             <Loader2 size={14} className="spin" />
-            {isLoading ? '正在加载会话列表…' : '正在补充头像和统计…'}
+            {isLoading ? '正在刷新会话列表…' : '正在补充头像和统计…'}
           </div>
         )}
 
