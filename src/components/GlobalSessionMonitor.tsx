@@ -96,8 +96,8 @@ export function GlobalSessionMonitor() {
             if (!isCurrentSession && (!oldSession || newSession.lastTimestamp > oldSession.lastTimestamp)) {
                 // 这是新消息事件
 
-                // 免打扰、折叠群、折叠入口不弹通知
-                if (newSession.isMuted || newSession.isFolded) continue
+                // 折叠群、折叠入口不弹通知
+                if (newSession.isFolded) continue
                 if (newSession.username.toLowerCase().includes('placeholder_foldgroup')) continue
 
                 // 1. 群聊过滤自己发送的消息

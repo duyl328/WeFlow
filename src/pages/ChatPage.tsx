@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Link, Mic, CheckCircle, Copy, Check, CheckSquare, Download, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Link, Mic, CheckCircle, Copy, Check, CheckSquare, Download, BarChart3, Edit2, Trash2, Users, FolderClosed, UserCheck, Crown, Aperture } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useChatStore } from '../stores/chatStore'
@@ -377,7 +377,7 @@ const SessionItem = React.memo(function SessionItem({
 
   return (
     <div
-      className={`session-item ${isActive ? 'active' : ''} ${session.isMuted ? 'muted' : ''}`}
+      className={`session-item ${isActive ? 'active' : ''}`}
       onClick={() => onSelect(session)}
     >
       <Avatar
@@ -394,9 +394,8 @@ const SessionItem = React.memo(function SessionItem({
         <div className="session-bottom">
           <span className="session-summary">{session.summary || '暂无消息'}</span>
           <div className="session-badges">
-            {session.isMuted && <BellOff size={12} className="mute-icon" />}
             {session.unreadCount > 0 && (
-              <span className={`unread-badge ${session.isMuted ? 'muted' : ''}`}>
+              <span className="unread-badge">
                 {session.unreadCount > 99 ? '99+' : session.unreadCount}
               </span>
             )}
@@ -414,7 +413,6 @@ const SessionItem = React.memo(function SessionItem({
     prevProps.session.unreadCount === nextProps.session.unreadCount &&
     prevProps.session.lastTimestamp === nextProps.session.lastTimestamp &&
     prevProps.session.sortTimestamp === nextProps.session.sortTimestamp &&
-    prevProps.session.isMuted === nextProps.session.isMuted &&
     prevProps.isActive === nextProps.isActive
   )
 })
@@ -1898,16 +1896,14 @@ function ChatPage(props: ChatPageProps) {
         if (!status) return session
 
         const nextIsFolded = status.isFolded ?? session.isFolded
-        const nextIsMuted = status.isMuted ?? session.isMuted
-        if (nextIsFolded === session.isFolded && nextIsMuted === session.isMuted) {
+        if (nextIsFolded === session.isFolded) {
           return session
         }
 
         hasChanges = true
         return {
           ...session,
-          isFolded: nextIsFolded,
-          isMuted: nextIsMuted
+          isFolded: nextIsFolded
         }
       })
 

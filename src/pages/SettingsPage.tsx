@@ -102,7 +102,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   const [transcribeLanguages, setTranscribeLanguages] = useState<string[]>(['zh'])
 
   const [notificationEnabled, setNotificationEnabled] = useState(true)
-  const [notificationPosition, setNotificationPosition] = useState<'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'>('top-right')
+  const [notificationPosition, setNotificationPosition] = useState<'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center'>('top-right')
   const [notificationFilterMode, setNotificationFilterMode] = useState<'all' | 'whitelist' | 'blacklist'>('all')
   const [notificationFilterList, setNotificationFilterList] = useState<string[]>([])
   const [filterSearchKeyword, setFilterSearchKeyword] = useState('')
@@ -1102,12 +1102,14 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
               <span className="custom-select-value">
                 {notificationPosition === 'top-right' ? '右上角' :
                   notificationPosition === 'bottom-right' ? '右下角' :
-                    notificationPosition === 'top-left' ? '左上角' : '左下角'}
+                    notificationPosition === 'top-left' ? '左上角' :
+                      notificationPosition === 'top-center' ? '中间上方' : '左下角'}
               </span>
               <ChevronDown size={14} className={`custom-select-arrow ${positionDropdownOpen ? 'rotate' : ''}`} />
             </div>
             <div className={`custom-select-dropdown ${positionDropdownOpen ? 'open' : ''}`}>
               {[
+                { value: 'top-center', label: '中间上方' },
                 { value: 'top-right', label: '右上角' },
                 { value: 'bottom-right', label: '右下角' },
                 { value: 'top-left', label: '左上角' },
@@ -1117,7 +1119,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
                   key={option.value}
                   className={`custom-select-option ${notificationPosition === option.value ? 'selected' : ''}`}
                   onClick={async () => {
-                    const val = option.value as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+                    const val = option.value as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center'
                     setNotificationPosition(val)
                     setPositionDropdownOpen(false)
                     await configService.setNotificationPosition(val)
