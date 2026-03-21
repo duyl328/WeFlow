@@ -155,8 +155,8 @@ function getModulePath(resourcesDir, appOutDir, platform) {
   if (!filename) return null;
 
   const direct = findFirstExisting([
-    path.join(resourcesDir, filename),
     path.join(resourcesDir, 'resources', filename),
+    path.join(resourcesDir, filename),
   ]);
   if (direct) return direct;
 
